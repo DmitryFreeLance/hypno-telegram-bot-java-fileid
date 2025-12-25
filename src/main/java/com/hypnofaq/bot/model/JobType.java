@@ -1,6 +1,9 @@
 package com.hypnofaq.bot.model;
 
 public enum JobType {
+    // NEW: delayed practice intro for deep-link start=2
+    SEND_PRACTICE_INTRO,
+
     SEND_CHECKUP_PROMPT,
     SEND_VIDEO_PROMPT,
     SEND_CALL_INVITE,

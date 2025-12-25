@@ -83,18 +83,18 @@ public final class HypnoBot extends TelegramLongPollingBot {
                 if (isStartCommand(text)) {
                     Optional<String> payloadOpt = parseStartPayload(text);
 
-                    // обычный /start -> обычный welcome
                     if (payloadOpt.isEmpty()) {
+                        // обычный /start
                         userDao.clearStartParam(userId);
                         sendWelcome(chatId);
                         return;
                     }
 
-                    // deep-link: /start 2
+                    // deep-link /start 2
                     String payload = payloadOpt.get();
                     userDao.setStartParam(userId, payload);
 
-                    // сразу идём в проверку подписки и далее ветвим
+                    // сразу идем в проверку подписки
                     handleStartOrCheckSub(chatId, userId);
                     return;
                 }
@@ -118,7 +118,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
                 switch (data) {
                     case CB_START -> {
                         ack(cq.getId());
-                        // обычная кнопка Старт не задаёт deep-link
+                        // Кнопка "Старт" — обычный сценарий
                         userDao.clearStartParam(userId);
                         handleStartOrCheckSub(chatId, userId);
                     }
@@ -161,8 +161,22 @@ public final class HypnoBot extends TelegramLongPollingBot {
         User u = uOpt.get();
 
         switch (job.type) {
+            case SEND_PRACTICE_INTRO -> {
+                // Deep-link start=2: через 3 часа присылаем шаг 1
+                // Если практику уже отправили (аудио), не дублируем
+                if (u.practiceSentAt != null) return;
+
+                sendText(job.tgId, Texts.PRACTICE_INTRO, null,
+                        Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
+                        true);
+
+                // stage можно не трогать строго, но логично пометить, что юзер готов
+                if (u.stage == UserStage.NEW || u.stage == UserStage.WAITING_SUBSCRIBE) {
+                    userDao.setStage(job.tgId, UserStage.READY);
+                }
+            }
+
             case SEND_CHECKUP_PROMPT -> {
-                // обычный сценарий: чек-ап после практики
                 if (u.practiceSentAt == null) return;
                 sendHtml(job.tgId, Texts.CHECKUP_PROMPT_HTML,
                         Keyboards.singleCallbackButton("👉 Скачать Чек-ап (PDF)", CB_DOWNLOAD_PDF),
@@ -263,18 +277,17 @@ public final class HypnoBot extends TelegramLongPollingBot {
             return;
         }
 
-        // subscribed
         Optional<User> uOpt = userDao.getUser(userId);
         String startParam = uOpt.map(u -> u.startParam).orElse(null);
 
         if ("2".equals(startParam)) {
-            // Deep-link: start from step 2 (check-up) -> then step 1 (practice) -> then дальше как обычно
+            // start=2: сразу шаг2, а шаг1 через 3 часа
             userDao.clearStartParam(userId);
-            startFromStep2ThenStep1(chatId, userId);
+            startFromStep2WithDelayForStep1(chatId, userId);
             return;
         }
 
-        // default flow
+        // default
         userDao.setStage(userId, UserStage.READY);
         sendText(chatId, Texts.PRACTICE_INTRO, null,
                 Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
@@ -283,21 +296,18 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
     /**
      * Deep-link "2":
-     *  - send step2: чек-ап prompt + PDF button
-     *  - then send step1: практика intro + get practice button
-     * Далее шаги 3+ идут так же, как обычно (через клики/планировщик).
+     *  - send step2 now (check-up prompt + PDF button)
+     *  - schedule step1 (practice intro) after 3 hours
      */
-    private void startFromStep2ThenStep1(long chatId, long userId) throws TelegramApiException {
-        // step 2 (чек-ап)
+    private void startFromStep2WithDelayForStep1(long chatId, long userId) throws TelegramApiException {
+        // step 2 now
         sendHtml(chatId, Texts.CHECKUP_PROMPT_HTML,
                 Keyboards.singleCallbackButton("👉 Скачать Чек-ап (PDF)", CB_DOWNLOAD_PDF),
                 true);
         userDao.setStage(userId, UserStage.CHECKUP_PROMPT_SENT);
 
-        // step 1 (практика) — чтобы не пропустить
-        sendText(chatId, Texts.PRACTICE_INTRO, null,
-                Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
-                true);
+        // step 1 after 3 hours
+        schedule(userId, JobType.SEND_PRACTICE_INTRO, Duration.ofHours(3), null);
     }
 
     private void handleGetPractice(long chatId, long userId) throws TelegramApiException {
@@ -326,11 +336,9 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
         sendHtml(chatId, Texts.PRACTICE_INSTRUCTION_HTML, null, false);
 
-        // сохраняем факт отправки практики
         userDao.markPracticeSent(userId);
 
-        // ВАЖНО: если чек-ап уже отправлен (deep-link "2" и человек уже скачал PDF),
-        // не нужно ставить повторный job SEND_CHECKUP_PROMPT.
+        // если чек-ап уже был отправлен/скачан, не шлём заново чек-ап через 24 часа
         Optional<User> uOpt = userDao.getUser(userId);
         boolean alreadyHasCheckup = uOpt.map(u -> u.checkupSentAt != null).orElse(false);
         if (!alreadyHasCheckup) {
@@ -362,7 +370,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
         }
 
         userDao.markCheckupSent(userId);
-        schedule(userId, JobType.SEND_VIDEO_PROMPT, Duration.ofHours(4), null);
+        schedule(userId, JobType.SEND_VIDEO_PROMPT, Duration.ofHours(4), null); // шаг 3
     }
 
     private void handleWatchVideo(long chatId, long userId) throws TelegramApiException {
@@ -448,7 +456,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
         if (text == null) return false;
         String t = text.trim();
         if (!t.startsWith("/start")) return false;
-        // allows /start@BotName
         return t.equals("/start") || t.startsWith("/start@") || t.startsWith("/start ");
     }
 
