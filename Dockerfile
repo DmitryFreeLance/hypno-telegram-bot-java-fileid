@@ -14,6 +14,6 @@ VOLUME ["/data", "/assets"]
 
 ENV DB_PATH=/data/bot.db
 
-COPY --from=build /build/target/hypno-telegram-bot-1.0.0-shaded.jar /app/app.jar
+COPY --from=build /build/target/app.jar /app/app.jar
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
