@@ -13,7 +13,6 @@ public final class Database {
     private final String jdbcUrl;
 
     public Database(String dbPath) {
-        // SQLite JDBC URL supports relative and absolute paths.
         this.jdbcUrl = "jdbc:sqlite:" + dbPath;
     }
 
@@ -39,9 +38,18 @@ public final class Database {
                         subscribed INTEGER NOT NULL DEFAULT 0,
                         practice_sent_at INTEGER,
                         checkup_sent_at INTEGER,
-                        choose_time_clicked INTEGER NOT NULL DEFAULT 0
+                        choose_time_clicked INTEGER NOT NULL DEFAULT 0,
+                        start_param TEXT
                     );
                     """);
+
+            // Migration for older DBs (if users table existed without start_param)
+            try {
+                st.execute("ALTER TABLE users ADD COLUMN start_param TEXT;");
+                log.info("Migration applied: users.start_param added.");
+            } catch (Exception ignored) {
+                // column already exists -> ignore
+            }
 
             st.execute("""
                     CREATE TABLE IF NOT EXISTS jobs (

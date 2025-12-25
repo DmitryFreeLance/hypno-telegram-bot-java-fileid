@@ -24,8 +24,8 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import java.io.File;
 import java.time.Duration;
@@ -44,14 +44,14 @@ public final class HypnoBot extends TelegramLongPollingBot {
     private static final String CB_WATCH_VIDEO = "WATCH_VIDEO";
     private static final String CB_CHOOSE_TIME = "CHOOSE_TIME";
 
+    // Keys for file_id cache
+    private static final String FILEKEY_PRACTICE_AUDIO = "practice_audio";
+    private static final String FILEKEY_CHECKUP_PDF = "checkup_pdf";
+
     private final BotConfig config;
     private final UserDao userDao;
     private final JobDao jobDao;
     private final FileIdDao fileIdDao;
-
-    // Keys for file_id cache
-    private static final String FILEKEY_PRACTICE_AUDIO = "practice_audio";
-    private static final String FILEKEY_CHECKUP_PDF = "checkup_pdf";
 
     public HypnoBot(BotConfig config, UserDao userDao, JobDao jobDao, FileIdDao fileIdDao) {
         this.config = config;
@@ -80,8 +80,22 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
                 userDao.ensureUser(userId);
 
-                if (text.startsWith("/start")) {
-                    sendWelcome(chatId);
+                if (isStartCommand(text)) {
+                    Optional<String> payloadOpt = parseStartPayload(text);
+
+                    // обычный /start -> обычный welcome
+                    if (payloadOpt.isEmpty()) {
+                        userDao.clearStartParam(userId);
+                        sendWelcome(chatId);
+                        return;
+                    }
+
+                    // deep-link: /start 2
+                    String payload = payloadOpt.get();
+                    userDao.setStartParam(userId, payload);
+
+                    // сразу идём в проверку подписки и далее ветвим
+                    handleStartOrCheckSub(chatId, userId);
                     return;
                 }
 
@@ -90,7 +104,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
                     return;
                 }
 
-                // ignore other messages (so bot doesn't spam)
                 return;
             }
 
@@ -105,6 +118,8 @@ public final class HypnoBot extends TelegramLongPollingBot {
                 switch (data) {
                     case CB_START -> {
                         ack(cq.getId());
+                        // обычная кнопка Старт не задаёт deep-link
+                        userDao.clearStartParam(userId);
                         handleStartOrCheckSub(chatId, userId);
                     }
                     case CB_CHECK_SUB -> {
@@ -147,7 +162,8 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
         switch (job.type) {
             case SEND_CHECKUP_PROMPT -> {
-                if (u.practiceSentAt == null) return; // prerequisite
+                // обычный сценарий: чек-ап после практики
+                if (u.practiceSentAt == null) return;
                 sendHtml(job.tgId, Texts.CHECKUP_PROMPT_HTML,
                         Keyboards.singleCallbackButton("👉 Скачать Чек-ап (PDF)", CB_DOWNLOAD_PDF),
                         true);
@@ -155,7 +171,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
             }
 
             case SEND_VIDEO_PROMPT -> {
-                if (u.checkupSentAt == null) return; // prerequisite
+                if (u.checkupSentAt == null) return;
                 sendHtml(job.tgId, Texts.VIDEO_PROMPT_HTML,
                         Keyboards.singleCallbackButton("📺 Смотреть объяснение", CB_WATCH_VIDEO),
                         true);
@@ -199,7 +215,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
             }
 
             case SEND_REMINDER_BOOK_TIME -> {
-                // Only if user hasn't clicked "Выбрать время"
                 if (u.chooseTimeClicked) return;
 
                 sendHtml(job.tgId, Texts.REMINDER_HTML,
@@ -227,7 +242,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
         try {
             subscribed = isSubscribed(userId);
         } catch (TelegramApiException e) {
-            // Can't check subscription (bot not in channel / not admin etc.)
             log.warn("Subscription check failed: {}", e.getMessage());
             String txt = """
 Сейчас я не могу проверить подписку 😔
@@ -246,12 +260,44 @@ public final class HypnoBot extends TelegramLongPollingBot {
             sendText(chatId, Texts.NEED_SUBSCRIBE, null,
                     Keyboards.singleCallbackButton("✅ Я подписалась", CB_CHECK_SUB),
                     true);
-        } else {
-            userDao.setStage(userId, UserStage.READY);
-            sendText(chatId, Texts.PRACTICE_INTRO, null,
-                    Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
-                    true);
+            return;
         }
+
+        // subscribed
+        Optional<User> uOpt = userDao.getUser(userId);
+        String startParam = uOpt.map(u -> u.startParam).orElse(null);
+
+        if ("2".equals(startParam)) {
+            // Deep-link: start from step 2 (check-up) -> then step 1 (practice) -> then дальше как обычно
+            userDao.clearStartParam(userId);
+            startFromStep2ThenStep1(chatId, userId);
+            return;
+        }
+
+        // default flow
+        userDao.setStage(userId, UserStage.READY);
+        sendText(chatId, Texts.PRACTICE_INTRO, null,
+                Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
+                true);
+    }
+
+    /**
+     * Deep-link "2":
+     *  - send step2: чек-ап prompt + PDF button
+     *  - then send step1: практика intro + get practice button
+     * Далее шаги 3+ идут так же, как обычно (через клики/планировщик).
+     */
+    private void startFromStep2ThenStep1(long chatId, long userId) throws TelegramApiException {
+        // step 2 (чек-ап)
+        sendHtml(chatId, Texts.CHECKUP_PROMPT_HTML,
+                Keyboards.singleCallbackButton("👉 Скачать Чек-ап (PDF)", CB_DOWNLOAD_PDF),
+                true);
+        userDao.setStage(userId, UserStage.CHECKUP_PROMPT_SENT);
+
+        // step 1 (практика) — чтобы не пропустить
+        sendText(chatId, Texts.PRACTICE_INTRO, null,
+                Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
+                true);
     }
 
     private void handleGetPractice(long chatId, long userId) throws TelegramApiException {
@@ -259,7 +305,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
         audio.setChatId(String.valueOf(chatId));
         audio.setCaption("🎧 Встреча с будущим Я");
 
-        // Prefer cached Telegram file_id (no re-upload). Otherwise fallback to local file.
         Optional<String> cached = fileIdDao.getFileId(FILEKEY_PRACTICE_AUDIO);
         if (cached.isPresent()) {
             audio.setAudio(new InputFile(cached.get()));
@@ -281,8 +326,16 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
         sendHtml(chatId, Texts.PRACTICE_INSTRUCTION_HTML, null, false);
 
+        // сохраняем факт отправки практики
         userDao.markPracticeSent(userId);
-        schedule(userId, JobType.SEND_CHECKUP_PROMPT, Duration.ofHours(24), null);
+
+        // ВАЖНО: если чек-ап уже отправлен (deep-link "2" и человек уже скачал PDF),
+        // не нужно ставить повторный job SEND_CHECKUP_PROMPT.
+        Optional<User> uOpt = userDao.getUser(userId);
+        boolean alreadyHasCheckup = uOpt.map(u -> u.checkupSentAt != null).orElse(false);
+        if (!alreadyHasCheckup) {
+            schedule(userId, JobType.SEND_CHECKUP_PROMPT, Duration.ofHours(24), null);
+        }
     }
 
     private void handleDownloadPdf(long chatId, long userId) throws TelegramApiException {
@@ -313,7 +366,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
     }
 
     private void handleWatchVideo(long chatId, long userId) throws TelegramApiException {
-        // Prefer forwarding from channel (requires bot in channel with access)
         try {
             ForwardMessage fm = new ForwardMessage();
             fm.setChatId(String.valueOf(chatId));
@@ -371,7 +423,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
         gcm.setUserId(userId);
 
         ChatMember m = execute(gcm);
-        String status = m.getStatus(); // "member", "administrator", "creator", "left", "kicked", ...
+        String status = m.getStatus();
         if (status == null) return false;
 
         status = status.toLowerCase(Locale.ROOT);
@@ -390,5 +442,23 @@ public final class HypnoBot extends TelegramLongPollingBot {
         if (kb != null) msg.setReplyMarkup(kb);
         msg.setDisableWebPagePreview(disablePreview);
         execute(msg);
+    }
+
+    private static boolean isStartCommand(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (!t.startsWith("/start")) return false;
+        // allows /start@BotName
+        return t.equals("/start") || t.startsWith("/start@") || t.startsWith("/start ");
+    }
+
+    private static Optional<String> parseStartPayload(String text) {
+        if (text == null) return Optional.empty();
+        String trimmed = text.trim();
+        String[] parts = trimmed.split("\\s+");
+        if (parts.length < 2) return Optional.empty();
+        String payload = parts[1].trim();
+        if (payload.isEmpty()) return Optional.empty();
+        return Optional.of(payload);
     }
 }

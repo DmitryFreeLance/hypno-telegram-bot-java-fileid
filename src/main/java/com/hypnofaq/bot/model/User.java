@@ -8,17 +8,22 @@ public final class User {
     public final Long checkupSentAt;
     public final boolean chooseTimeClicked;
 
+    /** Deep-link payload saved between /start and subscription flow (e.g. "2") */
+    public final String startParam;
+
     public User(long tgId,
                 UserStage stage,
                 boolean subscribed,
                 Long practiceSentAt,
                 Long checkupSentAt,
-                boolean chooseTimeClicked) {
+                boolean chooseTimeClicked,
+                String startParam) {
         this.tgId = tgId;
         this.stage = stage;
         this.subscribed = subscribed;
         this.practiceSentAt = practiceSentAt;
         this.checkupSentAt = checkupSentAt;
         this.chooseTimeClicked = chooseTimeClicked;
+        this.startParam = startParam;
     }
 }

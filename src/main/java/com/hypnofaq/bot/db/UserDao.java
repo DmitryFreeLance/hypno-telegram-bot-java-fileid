@@ -37,7 +37,7 @@ public final class UserDao {
     public Optional<User> getUser(long tgId) {
         try (Connection conn = db.openConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                     SELECT tg_id, stage, subscribed, practice_sent_at, checkup_sent_at, choose_time_clicked
+                     SELECT tg_id, stage, subscribed, practice_sent_at, checkup_sent_at, choose_time_clicked, start_param
                      FROM users WHERE tg_id = ?
                      """)) {
             ps.setLong(1, tgId);
@@ -57,13 +57,20 @@ public final class UserDao {
                 Long checkupSentAt = (Long) rs.getObject("checkup_sent_at");
                 boolean chooseTimeClicked = rs.getInt("choose_time_clicked") == 1;
 
+                String startParam = rs.getString("start_param");
+                if (startParam != null) {
+                    startParam = startParam.trim();
+                    if (startParam.isEmpty()) startParam = null;
+                }
+
                 return Optional.of(new User(
                         rs.getLong("tg_id"),
                         stage,
                         subscribed,
                         practiceSentAt,
                         checkupSentAt,
-                        chooseTimeClicked
+                        chooseTimeClicked,
+                        startParam
                 ));
             }
         } catch (Exception e) {
@@ -99,6 +106,31 @@ public final class UserDao {
         } catch (Exception e) {
             throw new RuntimeException("setSubscribed failed", e);
         }
+    }
+
+    public void setStartParam(long tgId, String startParam) {
+        long now = Instant.now().toEpochMilli();
+        String val = startParam;
+        if (val != null) {
+            val = val.trim();
+            if (val.isEmpty()) val = null;
+        }
+
+        try (Connection conn = db.openConnection();
+             PreparedStatement ps = conn.prepareStatement("""
+                     UPDATE users SET start_param = ?, updated_at = ? WHERE tg_id = ?
+                     """)) {
+            ps.setObject(1, val);
+            ps.setLong(2, now);
+            ps.setLong(3, tgId);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new RuntimeException("setStartParam failed", e);
+        }
+    }
+
+    public void clearStartParam(long tgId) {
+        setStartParam(tgId, null);
     }
 
     public void markPracticeSent(long tgId) {
