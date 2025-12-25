@@ -61,7 +61,7 @@ public final class BotConfig {
 
         String dbPath = env("DB_PATH").orElse("/data/bot.db");
 
-        long channelId = parseLong(env("CHANNEL_ID").orElse("-1003603335269"));
+        long channelId = parseLong(env("CHANNEL_ID").orElse("-1003060928185"));
         long faqChannelId = parseLong(env("FAQ_CHANNEL_ID").orElse(String.valueOf(channelId)));
 
         String practiceAudioPath = env("PRACTICE_AUDIO_PATH").orElse("/assets/Встреча с будущим Я.m4a");
