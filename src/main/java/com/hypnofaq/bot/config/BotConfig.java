@@ -15,6 +15,10 @@ public final class BotConfig {
     public final String practiceAudioPath;
     public final String checkupPdfPath;
 
+    // NEW: images for step 2 and step 5
+    public final String checkupImagePath; // 2.jpg
+    public final String annaImagePath;    // 5.jpg
+
     public final int videoPostId;
 
     public final String annaPostUrl;
@@ -33,6 +37,8 @@ public final class BotConfig {
             long faqChannelId,
             String practiceAudioPath,
             String checkupPdfPath,
+            String checkupImagePath,
+            String annaImagePath,
             int videoPostId,
             String annaPostUrl,
             String maximPostUrl,
@@ -47,6 +53,8 @@ public final class BotConfig {
         this.faqChannelId = faqChannelId;
         this.practiceAudioPath = practiceAudioPath;
         this.checkupPdfPath = checkupPdfPath;
+        this.checkupImagePath = checkupImagePath;
+        this.annaImagePath = annaImagePath;
         this.videoPostId = videoPostId;
         this.annaPostUrl = annaPostUrl;
         this.maximPostUrl = maximPostUrl;
@@ -67,6 +75,10 @@ public final class BotConfig {
         String practiceAudioPath = env("PRACTICE_AUDIO_PATH").orElse("/assets/Встреча с будущим Я.m4a");
         String checkupPdfPath = env("CHECKUP_PDF_PATH").orElse("/assets/ЧЕК-АП.pdf");
 
+        // NEW: images (defaults)
+        String checkupImagePath = env("CHECKUP_IMAGE_PATH").orElse("/assets/2.jpg");
+        String annaImagePath = env("ANNA_IMAGE_PATH").orElse("/assets/5.jpg");
+
         int videoPostId = parseInt(env("VIDEO_POST_ID").orElse("135"));
 
         String annaUrl = env("ANNA_POST_URL").orElse("https://t.me/hypno_FAQ/112");
@@ -79,8 +91,10 @@ public final class BotConfig {
 
         return new BotConfig(
                 token, username, dbPath, channelId, faqChannelId,
-                practiceAudioPath, checkupPdfPath, videoPostId,
-                annaUrl, maximUrl, bookUsername, pollSeconds, logLevel
+                practiceAudioPath, checkupPdfPath,
+                checkupImagePath, annaImagePath,
+                videoPostId, annaUrl, maximUrl,
+                bookUsername, pollSeconds, logLevel
         );
     }
 
