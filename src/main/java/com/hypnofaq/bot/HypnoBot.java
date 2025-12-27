@@ -45,7 +45,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
     private static final String CB_WATCH_VIDEO = "WATCH_VIDEO";
     private static final String CB_CHOOSE_TIME = "CHOOSE_TIME";
 
-    // NEW: step2 extra button -> show step1
+    // step2 extra button -> show step1
     private static final String CB_WHAT_DATE = "WHAT_DATE";
 
     // Keys for file_id cache
@@ -88,17 +88,12 @@ public final class HypnoBot extends TelegramLongPollingBot {
                     Optional<String> payloadOpt = parseStartPayload(text);
 
                     if (payloadOpt.isEmpty()) {
-                        // обычный /start
                         userDao.clearStartParam(userId);
                         sendWelcome(chatId);
                         return;
                     }
 
-                    // deep-link /start 2
-                    String payload = payloadOpt.get();
-                    userDao.setStartParam(userId, payload);
-
-                    // сразу проверка подписки
+                    userDao.setStartParam(userId, payloadOpt.get());
                     handleStartOrCheckSub(chatId, userId);
                     return;
                 }
@@ -135,7 +130,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
                     }
                     case CB_WHAT_DATE -> {
                         ack(cq.getId());
-                        handleWhatIsDate(chatId, userId); // step1 on demand
+                        handleWhatIsDate(chatId, userId);
                     }
                     case CB_GET_PRACTICE -> {
                         ack(cq.getId());
@@ -169,9 +164,7 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
         switch (job.type) {
             case SEND_CHECKUP_PROMPT -> {
-                // обычный сценарий: чек-ап после практики
                 if (u.practiceSentAt == null) return;
-
                 sendStep2WithImage(job.tgId, false);
                 userDao.setStage(job.tgId, UserStage.CHECKUP_PROMPT_SENT);
             }
@@ -198,17 +191,20 @@ public final class HypnoBot extends TelegramLongPollingBot {
             }
 
             case SEND_ANNA_STORY -> {
-                // STEP 5: photo 5.jpg + text
-                sendPhotoHtml(job.tgId, config.annaImagePath, Texts.ANNA_STORY + "\n" + config.annaPostUrl, null);
-                userDao.setStage(job.tgId, UserStage.ANNA_STORY_SENT);
+                // STEP 5: фото + вступительный текст, затем пересылаем сам пост из канала
+                sendPhotoHtml(job.tgId, config.annaImagePath, Texts.ANNA_STORY, null);
+                forwardFromFaq(job.tgId, config.annaPostId);
 
+                userDao.setStage(job.tgId, UserStage.ANNA_STORY_SENT);
                 schedule(job.tgId, JobType.SEND_MAXIM_STORY, Duration.ofHours(24), null);
             }
 
             case SEND_MAXIM_STORY -> {
-                sendText(job.tgId, Texts.MAXIM_STORY + "\n" + config.maximPostUrl, "HTML", null, true);
-                userDao.setStage(job.tgId, UserStage.MAXIM_STORY_SENT);
+                // STEP 6: вступительный текст, затем пересылаем сам пост из канала
+                sendText(job.tgId, Texts.MAXIM_STORY, "HTML", null, true);
+                forwardFromFaq(job.tgId, config.maximPostId);
 
+                userDao.setStage(job.tgId, UserStage.MAXIM_STORY_SENT);
                 schedule(job.tgId, JobType.SEND_FINAL_PUSH, Duration.ofSeconds(5), null);
             }
 
@@ -229,7 +225,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
                         true);
             }
 
-            // If your enum still contains SEND_PRACTICE_INTRO from older edits — we just ignore it now.
             default -> {
                 // no-op
             }
@@ -279,24 +274,18 @@ public final class HypnoBot extends TelegramLongPollingBot {
         String startParam = uOpt.map(u -> u.startParam).orElse(null);
 
         if ("2".equals(startParam)) {
-            // Deep-link start=2: сразу шаг 2 (с фото + 2 кнопки). Шаг 1 только по кнопке.
             userDao.clearStartParam(userId);
             userDao.setStage(userId, UserStage.CHECKUP_PROMPT_SENT);
             sendStep2WithImage(chatId, true);
             return;
         }
 
-        // default
         userDao.setStage(userId, UserStage.READY);
         sendText(chatId, Texts.PRACTICE_INTRO, "HTML",
                 Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
                 true);
     }
 
-    /**
-     * Step 2 message.
-     * If deepLink=true -> adds extra button "А что за свидание?"
-     */
     private void sendStep2WithImage(long chatId, boolean deepLink) throws TelegramApiException {
         InlineKeyboardMarkup kb;
         if (deepLink) {
@@ -307,26 +296,19 @@ public final class HypnoBot extends TelegramLongPollingBot {
             kb = Keyboards.singleCallbackButton("👉 Скачать Чек-ап (PDF)", CB_DOWNLOAD_PDF);
         }
 
-        // photo 2.jpg + text as caption
         sendPhotoHtml(chatId, config.checkupImagePath, Texts.CHECKUP_PROMPT_HTML, kb);
     }
 
-    /**
-     * Button from step2: show step1 intro immediately (practice intro + button).
-     * No timers here. Step3 timer happens after PDF download (existing logic).
-     */
     private void handleWhatIsDate(long chatId, long userId) throws TelegramApiException {
         sendText(chatId, Texts.PRACTICE_INTRO, "HTML",
                 Keyboards.singleCallbackButton("Получить практику", CB_GET_PRACTICE),
                 true);
-        if (userId > 0) {
-            // do not overwrite CHECKUP stages; just mark that bot is ready to interact
-            Optional<User> uOpt = userDao.getUser(userId);
-            if (uOpt.isPresent()) {
-                User u = uOpt.get();
-                if (u.stage == UserStage.NEW || u.stage == UserStage.WAITING_SUBSCRIBE) {
-                    userDao.setStage(userId, UserStage.READY);
-                }
+
+        Optional<User> uOpt = userDao.getUser(userId);
+        if (uOpt.isPresent()) {
+            User u = uOpt.get();
+            if (u.stage == UserStage.NEW || u.stage == UserStage.WAITING_SUBSCRIBE) {
+                userDao.setStage(userId, UserStage.READY);
             }
         }
     }
@@ -359,8 +341,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
 
         userDao.markPracticeSent(userId);
 
-        // IMPORTANT:
-        // If user already saw step2 (deeplink start=2), do NOT schedule step2 again.
         Optional<User> uOpt = userDao.getUser(userId);
         boolean checkupAlreadyPrompted = uOpt.map(u ->
                 u.checkupSentAt != null ||
@@ -401,7 +381,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
             fileIdDao.upsertFileId(FILEKEY_CHECKUP_PDF, sent.getDocument().getFileId());
         }
 
-        // This is your step2->step3 timer: 4 hours after PDF sent
         userDao.markCheckupSent(userId);
         schedule(userId, JobType.SEND_VIDEO_PROMPT, Duration.ofHours(4), null);
     }
@@ -444,6 +423,28 @@ public final class HypnoBot extends TelegramLongPollingBot {
     /* ---------------------------
        Helpers
        --------------------------- */
+
+    // NEW: forward post from FAQ channel by message_id (NO LINKS)
+    private void forwardFromFaq(long chatId, int messageId) throws TelegramApiException {
+        if (messageId <= 0) {
+            log.warn("Invalid FAQ messageId: {}", messageId);
+            return;
+        }
+        try {
+            ForwardMessage fm = new ForwardMessage();
+            fm.setChatId(String.valueOf(chatId));
+            fm.setFromChatId(String.valueOf(config.faqChannelId));
+            fm.setMessageId(messageId);
+            execute(fm);
+        } catch (TelegramApiException e) {
+            log.warn("Forward from FAQ failed (msgId={}): {}", messageId, e.getMessage());
+            // по твоему требованию ссылку НЕ отправляем
+            sendText(chatId,
+                    "Не получилось переслать отзыв из канала 😔\n" +
+                            "Проверь, что бот добавлен в канал @hypno_FAQ и имеет доступ к постам.",
+                    null, null, true);
+        }
+    }
 
     private void schedule(long tgId, JobType type, Duration delay, String payload) {
         long runAt = Instant.now().plus(delay).toEpochMilli();
@@ -488,7 +489,6 @@ public final class HypnoBot extends TelegramLongPollingBot {
     private void sendPhotoHtml(long chatId, String imagePath, String htmlCaption, InlineKeyboardMarkup kb) throws TelegramApiException {
         File f = new File(imagePath);
         if (!f.exists() || !f.isFile()) {
-            // Fallback: no image => just send text
             sendHtml(chatId, htmlCaption, kb, true);
             return;
         }

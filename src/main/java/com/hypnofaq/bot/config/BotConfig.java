@@ -15,7 +15,7 @@ public final class BotConfig {
     public final String practiceAudioPath;
     public final String checkupPdfPath;
 
-    // NEW: images for step 2 and step 5
+    // images for step 2 and step 5
     public final String checkupImagePath; // 2.jpg
     public final String annaImagePath;    // 5.jpg
 
@@ -23,6 +23,10 @@ public final class BotConfig {
 
     public final String annaPostUrl;
     public final String maximPostUrl;
+
+    // NEW: message ids in FAQ channel (derived from URL or ENV override)
+    public final int annaPostId;
+    public final int maximPostId;
 
     public final String bookUsername;
     public final int schedulerPollSeconds;
@@ -42,6 +46,8 @@ public final class BotConfig {
             int videoPostId,
             String annaPostUrl,
             String maximPostUrl,
+            int annaPostId,
+            int maximPostId,
             String bookUsername,
             int schedulerPollSeconds,
             String logLevel
@@ -58,6 +64,8 @@ public final class BotConfig {
         this.videoPostId = videoPostId;
         this.annaPostUrl = annaPostUrl;
         this.maximPostUrl = maximPostUrl;
+        this.annaPostId = annaPostId;
+        this.maximPostId = maximPostId;
         this.bookUsername = bookUsername;
         this.schedulerPollSeconds = schedulerPollSeconds;
         this.logLevel = logLevel;
@@ -75,7 +83,6 @@ public final class BotConfig {
         String practiceAudioPath = env("PRACTICE_AUDIO_PATH").orElse("/assets/Встреча с будущим Я.m4a");
         String checkupPdfPath = env("CHECKUP_PDF_PATH").orElse("/assets/ЧЕК-АП.pdf");
 
-        // NEW: images (defaults)
         String checkupImagePath = env("CHECKUP_IMAGE_PATH").orElse("/assets/2.jpg");
         String annaImagePath = env("ANNA_IMAGE_PATH").orElse("/assets/5.jpg");
 
@@ -83,6 +90,15 @@ public final class BotConfig {
 
         String annaUrl = env("ANNA_POST_URL").orElse("https://t.me/hypno_FAQ/112");
         String maximUrl = env("MAXIM_POST_URL").orElse("https://t.me/hypno_FAQ/140");
+
+        // NEW: allow explicit message ids, otherwise parse from URL
+        int annaPostId = env("ANNA_POST_ID")
+                .map(BotConfig::parseInt)
+                .orElseGet(() -> parseTelegramPostId(annaUrl).orElse(112));
+
+        int maximPostId = env("MAXIM_POST_ID")
+                .map(BotConfig::parseInt)
+                .orElseGet(() -> parseTelegramPostId(maximUrl).orElse(140));
 
         String bookUsername = env("BOOK_USERNAME").orElse("katherine_hypno");
         int pollSeconds = parseInt(env("SCHEDULER_POLL_SECONDS").orElse("10"));
@@ -93,9 +109,25 @@ public final class BotConfig {
                 token, username, dbPath, channelId, faqChannelId,
                 practiceAudioPath, checkupPdfPath,
                 checkupImagePath, annaImagePath,
-                videoPostId, annaUrl, maximUrl,
+                videoPostId,
+                annaUrl, maximUrl,
+                annaPostId, maximPostId,
                 bookUsername, pollSeconds, logLevel
         );
+    }
+
+    private static Optional<Integer> parseTelegramPostId(String url) {
+        if (url == null) return Optional.empty();
+        try {
+            String u = url.trim();
+            int slash = u.lastIndexOf('/');
+            if (slash < 0 || slash == u.length() - 1) return Optional.empty();
+            String tail = u.substring(slash + 1).trim();
+            if (tail.isEmpty()) return Optional.empty();
+            return Optional.of(Integer.parseInt(tail));
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
     }
 
     private static Optional<String> env(String name) {
